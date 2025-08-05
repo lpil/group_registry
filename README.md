@@ -1,43 +1,43 @@
-# process_group
+# group_registry
 
-Process groups, useful for pubsub
+Organise processes into groups! Useful for pubsub.
 
-[![Package Version](https://img.shields.io/hexpm/v/process_group)](https://hex.pm/packages/process_group)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/process_group/)
+[![Package Version](https://img.shields.io/hexpm/v/group_registry)](https://hex.pm/packages/group_registry)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/group_registry/)
 
 ```sh
-gleam add process_group@1
+gleam add group_registry@1
 ```
 
 Add a group registry to your supervision tree with
-`process_group.supervised` and then create groups in that registry with
-`process_group.new`.
+`group_registry.supervised` and a name that you created at the start of your
+program.
 
 ```gleam
 import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
-import process_group
+import group_registry
 
 pub fn my_supervisor(name: Name(_)) -> actor.StartResult(_) {
   supervisor.new(supervisor.RestForOne)
-  |> supervisor.add(process_group.supervised())
+  |> supervisor.add(group_registry.supervised(name))
   |> supervisor.start
 }
 ```
 
-Use `process_group.get_registry` to lookup the registry by the name you gave it
-and then use `process_group.new` to create groups.
+Elsewhere in your code use `group_registry.get_registry` to get a reference to
+the registry using the name you passed to `group_registry.supervised`.
 
-Processes can then use the `process_group.join` function to join a group.
+Processes can then use the `group_registry.join` function to join groups.
 
 ```gleam
 import gleam/otp/actor
-import process_group.{type ProcessGroup}
+import group_registry.{type GroupRegistry}
 
-pub fn start_actor(group: ProcessGroup(String)) -> actor.StartResult(_) {
+pub fn start_actor(registry: GroupRegistry(String)) -> actor.StartResult(_) {
   actor.new_with_initialiser(100, fn(_) { 
-    // Join a group
-    let subject = process_group.join()
+    // Join a group named "updates"
+    let subject = group_registry.join(registry, "extra-cool-processes")
     // Add the group subject to the selector so messages will be received
     actor.initialised(Nil)
     |> actor.selecting(process.new_selector() |> process.select(subject))
@@ -55,12 +55,20 @@ Other processes can then publish messages to the members of the group.
 
 ```gleam
 import gleam/erlang/process
-import process_group.{type ProcessGroup}
+import group_registry.{type GroupRegistry}
 
-pub fn publish(group: ProcessGroup(String)) -> Nil {
-  process_group.members(group)
-  |> list.each(process.send(_, "Hello!"))
+pub fn publish(registry: GroupRegistry(String)) -> Nil {
+  // This returns a list of subjects for the processes in the group
+  let members = group_registry.members(registry, "extra-cool-processes")
+
+  // Send a message to each one
+  list.each(members, fn(member) {
+    process.send(member, "Hello!")
+  })
 }
 ```
 
-Further documentation can be found at <https://hexdocs.pm/process_group>.
+When a process terminates it is automatically cleaned up and removed from the
+groups in the registry.
+
+Further documentation can be found at <https://hexdocs.pm/group_registry>.

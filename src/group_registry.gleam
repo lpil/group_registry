@@ -38,7 +38,7 @@
 ////
 //// Inserting members or getting all the members of a group `pg` is fast, but
 //// removing members from large groups with thousands of members in them is
-//// much slower.
+//// much slower. This module is best suited to numerous small groups.
 ////
 //// If you need larger groups and members to be removed or to terminate
 //// frequently you may want to experiment with other registries. Always
@@ -46,7 +46,6 @@
 
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
-import gleam/erlang/reference.{type Reference}
 import gleam/list
 import gleam/otp/actor
 import gleam/otp/supervision
@@ -55,41 +54,56 @@ import gleam/otp/supervision
 // Group registry
 //
 
-pub type GroupRegistry
+/// A reference to the group registry process.
+///
+/// The type parameter is a message type that processes registered with the
+/// registry can be sent.
+///
+pub type GroupRegistry(message)
 
-pub type GroupRegistryMessage
+/// The message type that the registry accepts. This type is opaque and cannot
+/// be constructed directly. Instead use the functions in this module to
+/// interact with the registry.
+///
+/// The type parameter is a message type that processes registered with the
+/// registry can be sent.
+///
+pub type Message(message)
 
-pub fn start_registry(
-  name: Name(GroupRegistryMessage),
-) -> actor.StartResult(GroupRegistry) {
+/// Start the registry with the given name. You likely want to use the
+/// `supervised` function instead, to add the registry to your supervision
+/// tree, but this may still be useful in your tests.
+///
+/// Remember that names must be created at the start of your program, and must
+/// not be created dynamically such as within your supervision tree (it may
+/// restart, creating new names) or in a loop.
+///
+pub fn start(
+  name: Name(Message(message)),
+) -> actor.StartResult(GroupRegistry(message)) {
   case erlang_start(name) {
     Ok(pid) -> Ok(actor.Started(pid:, data: get_registry(name)))
     Error(reason) -> Error(actor.InitExited(process.Abnormal(reason)))
   }
 }
 
-pub fn supervised_registry(
-  name: Name(GroupRegistryMessage),
-) -> supervision.ChildSpecification(GroupRegistry) {
-  supervision.worker(fn() { start_registry(name) })
+/// A specification for starting the registry under a supervisor, using the
+/// given name. You should likely use this function in applications.
+///
+/// Remember that names must be created at the start of your program, and must
+/// not be created dynamically such as within your supervision tree (it may
+/// restart, creating new names) or in a loop.
+///
+pub fn supervised(
+  name: Name(Message(message)),
+) -> supervision.ChildSpecification(GroupRegistry(message)) {
+  supervision.worker(fn() { start(name) })
 }
 
 @external(erlang, "gleam@function", "identity")
-pub fn get_registry(name: Name(GroupRegistryMessage)) -> GroupRegistry
+pub fn get_registry(name: Name(Message(message))) -> GroupRegistry(message)
 
-//
-// Groups
-//
-
-pub opaque type ProcessGroup(message) {
-  Group(tag: reference.Reference, registry: GroupRegistry)
-}
-
-pub fn new(registry: GroupRegistry) -> ProcessGroup(message) {
-  Group(tag: reference.new(), registry:)
-}
-
-/// Add a process to the group.
+/// Add a process to a group.
 ///
 /// A process can join a group many times and must then leave the group the
 /// same number of times.
@@ -97,15 +111,23 @@ pub fn new(registry: GroupRegistry) -> ProcessGroup(message) {
 /// A subject is returned which can be used to send to messages to the member,
 /// or for the member to receive messages.
 ///
-pub fn join(group: ProcessGroup(message), new_member: Pid) -> Subject(message) {
-  erlang_join(group.registry, group.tag, new_member)
-  subject_for_group(group, new_member)
+pub fn join(
+  registry: GroupRegistry(message),
+  group: String,
+  new_member: Pid,
+) -> Subject(message) {
+  erlang_join(registry, group, new_member)
+  make_subject(registry, group, new_member)
 }
 
 /// Remove the given processes from the group, if they are members.
 ///
-pub fn leave(group: ProcessGroup(message), members: List(Pid)) -> Nil {
-  erlang_leave(group.registry, group.tag, members)
+pub fn leave(
+  registry: GroupRegistry(message),
+  group: String,
+  members: List(Pid),
+) -> Nil {
+  erlang_leave(registry, group, members)
   Nil
 }
 
@@ -115,17 +137,24 @@ pub fn leave(group: ProcessGroup(message), members: List(Pid)) -> Nil {
 /// If a process joined the group multiple times it will be present in the list
 /// that number of times.
 ///
-pub fn members(group: ProcessGroup(message)) -> List(Subject(message)) {
-  erlang_members(group.registry, group.tag)
-  |> list.map(subject_for_group(group, _))
+pub fn members(
+  registry: GroupRegistry(message),
+  group: String,
+) -> List(Subject(message)) {
+  erlang_members(registry, group)
+  |> list.map(make_subject(registry, group, _))
 }
 
 //
 // Helpers
 //
 
-fn subject_for_group(group: ProcessGroup(message), pid: Pid) -> Subject(message) {
-  let tag = reference_to_dynamic(group.tag)
+fn make_subject(
+  registry: GroupRegistry(message),
+  group: String,
+  pid: Pid,
+) -> Subject(message) {
+  let tag = make_tag(#(registry, group))
   process.unsafely_create_subject(pid, tag)
 }
 
@@ -136,24 +165,24 @@ fn subject_for_group(group: ProcessGroup(message), pid: Pid) -> Subject(message)
 type DoNotLeak
 
 @external(erlang, "pg", "start_link")
-fn erlang_start(name: Name(GroupRegistryMessage)) -> Result(Pid, Dynamic)
+fn erlang_start(name: Name(Message(m))) -> Result(Pid, Dynamic)
 
 @external(erlang, "pg", "join")
 fn erlang_join(
-  registry: GroupRegistry,
-  group: Reference,
+  registry: GroupRegistry(m),
+  group: String,
   new_members: Pid,
 ) -> DoNotLeak
 
 @external(erlang, "pg", "leave")
 fn erlang_leave(
-  registry: GroupRegistry,
-  group: Reference,
+  registry: GroupRegistry(m),
+  group: String,
   members: List(Pid),
 ) -> DoNotLeak
 
 @external(erlang, "pg", "get_members")
-fn erlang_members(registry: GroupRegistry, group: Reference) -> List(Pid)
+fn erlang_members(registry: GroupRegistry(m), group: String) -> List(Pid)
 
 @external(erlang, "gleam@function", "identity")
-fn reference_to_dynamic(a: Reference) -> Dynamic
+fn make_tag(a: #(GroupRegistry(m), String)) -> Dynamic
