@@ -9,7 +9,7 @@ pub fn main() -> Nil {
 
 pub fn hello_world_test() {
   let name = process.new_name("process_group_registry")
-  let assert Ok(registry) = group_registry.start_registry(name)
+  let assert Ok(registry) = group_registry.start(name)
   let registry = registry.data
 
   // Groups start empty
